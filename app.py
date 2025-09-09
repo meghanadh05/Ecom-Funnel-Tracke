@@ -1,12 +1,11 @@
 # app.py
-# COMPREHENSIVE E-COMMERCE ANALYTICS DASHBOARD (PORTFOLIO EDITION - CORRECTED)
-# Features: Deep EDA, Funnel, Temporal, Customer & Product Analysis
+# COMPREHENSIVE E-COMMERCE ANALYTICS DASHBOARD (PORTFOLIO EDITION - FINAL)
+# Features: Deep EDA, Funnel, Temporal, Customer & Product Analysis with robust display logic.
 
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 
 # ---------------------------#
@@ -40,7 +39,7 @@ class EcomDashboard:
         df.dropna(subset=["Timestamp", "UserID", "EventType"], inplace=True)
         df["Amount"] = pd.to_numeric(df["Amount"], errors='coerce').fillna(0)
         
-        # --- THIS IS THE CORRECTED LINE ---
+        # This line is crucial for handling string operations correctly.
         df["EventType"] = df["EventType"].astype(str).str.strip().str.lower()
         
         df['Hour'] = df['Timestamp'].dt.hour
@@ -83,7 +82,6 @@ class EcomDashboard:
         st.header("Exploratory Data Analysis (EDA)")
         st.markdown("A high-level overview of the dataset's structure and contents.")
 
-        # Key Metrics
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Rows", f"{len(df):,}")
         col2.metric("Total Columns", f"{len(df.columns)}")
@@ -91,11 +89,14 @@ class EcomDashboard:
         col4.metric("Date Range End", df['Timestamp'].max().strftime('%Y-%m-%d'))
         st.markdown("---")
 
-        # Data Preview & Schema
         c1, c2 = st.columns((1, 1))
         with c1:
             st.subheader("Data Preview")
-            st.dataframe(df.head())
+            # --- ROBUST DISPLAY FIX ---
+            # Create a display-only version of the dataframe head
+            # This converts all columns to strings to prevent rendering errors
+            st.dataframe(df.head().astype(str))
+            
         with c2:
             st.subheader("Dataset Schema")
             schema_df = pd.DataFrame({
@@ -106,8 +107,6 @@ class EcomDashboard:
             st.dataframe(schema_df)
 
         st.markdown("---")
-
-        # Event Type Distribution
         st.subheader("Distribution of All Event Types")
         event_counts = df['EventType'].value_counts()
         fig = px.pie(event_counts, values=event_counts.values, names=event_counts.index, 
@@ -134,7 +133,6 @@ class EcomDashboard:
     def render_temporal_tab(self, df: pd.DataFrame):
         st.header("Temporal (Time-Based) Analysis")
 
-        # Activity Heatmap
         st.subheader("User Activity by Day and Hour")
         day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         activity = df.groupby(['DayOfWeek', 'Hour']).size().reset_index(name='counts')
@@ -142,7 +140,6 @@ class EcomDashboard:
         fig = px.density_heatmap(activity, x='Hour', y='DayOfWeek', z='counts', title="Activity Heatmap")
         st.plotly_chart(fig, use_container_width=True)
         
-        # Daily Event Trends
         st.subheader("Daily Funnel Activity")
         daily_counts = df[df['FunnelEvent'].notna()].groupby([df['Timestamp'].dt.date, 'FunnelEvent']).size().reset_index(name='count')
         fig2 = px.line(daily_counts, x='Timestamp', y='count', color='FunnelEvent', title="Daily Funnel Events Over Time")
@@ -151,7 +148,6 @@ class EcomDashboard:
     def render_customer_tab(self, df: pd.DataFrame):
         st.header("Customer Insights")
         
-        # User Leaderboard
         st.subheader("Top Users Leaderboard")
         user_metrics = df.groupby('UserID').agg(
             total_events=('EventType', 'count'),
