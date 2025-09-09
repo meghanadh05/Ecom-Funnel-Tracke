@@ -1,5 +1,5 @@
 # app.py
-# COMPREHENSIVE E-COMMERCE ANALYTICS DASHBOARD (PORTFOLIO EDITION)
+# COMPREHENSIVE E-COMMERCE ANALYTICS DASHBOARD (PORTFOLIO EDITION - CORRECTED)
 # Features: Deep EDA, Funnel, Temporal, Customer & Product Analysis
 
 import pandas as pd
@@ -39,7 +39,10 @@ class EcomDashboard:
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors='coerce')
         df.dropna(subset=["Timestamp", "UserID", "EventType"], inplace=True)
         df["Amount"] = pd.to_numeric(df["Amount"], errors='coerce').fillna(0)
-        df["EventType"] = df["EventType"].astype(str).str.strip().lower()
+        
+        # --- THIS IS THE CORRECTED LINE ---
+        df["EventType"] = df["EventType"].astype(str).str.strip().str.lower()
+        
         df['Hour'] = df['Timestamp'].dt.hour
         df['DayOfWeek'] = df['Timestamp'].dt.day_name()
         event_map = {"product_view": "Product View", "add_to_cart": "Add to Cart", "purchase": "Purchase"}
