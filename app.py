@@ -1,13 +1,6 @@
 # app.py
-# E-commerce Funnel Analytics Dashboard 🛍️
-# Turns raw clickstream into a professional, interactive funnel dashboard:
-# - KPIs + conversion rates
-# - Funnel visualization + drop-off analysis
-# - Trends over time
-# - Activity heatmap (day/hour)
-# - Segment conversions (Device/Category if present)
-# - Product insights (top products, per-product conversion if possible)
-# - Downloadable summary tables
+# ADVANCED E-commerce Funnel & Revenue Dashboard
+# Provides accurate, user-centric conversion metrics and deep product/revenue insights.
 
 import pandas as pd
 import numpy as np
@@ -20,409 +13,196 @@ from datetime import date
 # Page Config
 # ---------------------------#
 st.set_page_config(
-    page_title="E-commerce Funnel Dashboard",
-    page_icon="🛍️",
+    page_title="Advanced E-commerce Dashboard",
+    page_icon="💰",
     layout="wide"
 )
 
 # ---------------------------#
-# Helpers
+# Helper Functions & Data Loading
 # ---------------------------#
-ESSENTIAL_COLS = ["Timestamp", "EventType"]
 
-def _safe_div(num, den):
-    return (num / den) if den else 0.0
+@st.cache_data
+def load_and_prep_data(path: str) -> pd.DataFrame:
+    """Loads, standardizes, and prepares the data for analysis."""
+    df = pd.read_csv(path)
+    
+    # Standardize column names for robustness
+    rename_map = {c: c.strip().replace(" ", "") for c in df.columns}
+    df = df.rename(columns=rename_map)
 
-def standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Try to standardize common column name variants to Timestamp / EventType / UserID / ProductID / Category / Device."""
-    cols = {c.lower(): c for c in df.columns}
-    rename_map = {}
+    # Ensure essential columns exist
+    for col in ["UserID", "Timestamp", "EventType"]:
+        if col not in df.columns:
+            raise ValueError(f"Missing required column: {col}")
+            
+    # Data cleaning and typing
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+    df.dropna(subset=["Timestamp", "UserID", "EventType"], inplace=True)
+    df["EventType"] = df["EventType"].astype(str).str.strip().str.lower()
+    df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
 
-    # Timestamp
-    for key in ["timestamp", "event_time", "time", "datetime", "ts"]:
-        if key in cols:
-            rename_map[cols[key]] = "Timestamp"
-            break
-
-    # EventType
-    for key in ["eventtype", "event", "event_name", "eventname", "name"]:
-        if key in cols:
-            rename_map[cols[key]] = "EventType"
-            break
-
-    # Optional / helpful columns
-    for candidates, target in [
-        (["userid", "user_id", "user", "uid"], "UserID"),
-        (["productid", "product_id", "sku", "item_id"], "ProductID"),
-        (["category", "product_category", "cat"], "Category"),
-        (["device", "platform", "os"], "Device")
-    ]:
-        for key in candidates:
-            if key in cols:
-                rename_map[cols[key]] = target
-                break
-
-    return df.rename(columns=rename_map)
-
-def standardize_events(df: pd.DataFrame) -> pd.DataFrame:
-    """Map any event variants into canonical funnel stages."""
-    if "EventType" not in df.columns:
-        return df
-
-    # Lowercase for mapping
-    raw = df["EventType"].astype(str).str.strip().str.lower()
-
-    # Common variants
-    mapping = {
-        "product_view": "Product View",
-        "view": "Product View",
-        "product view": "Product View",
-        "browse": "Product View",
-
-        "add_to_cart": "Add to Cart",
-        "addtocart": "Add to Cart",
-        "cart_add": "Add to Cart",
-        "cart add": "Add to Cart",
-
-        "purchase": "Purchase",
-        "order_completed": "Purchase",
-        "order complete": "Purchase",
-        "checkout_complete": "Purchase",
-        "success": "Purchase"
+    # Standardize main funnel events
+    event_map = {
+        "product_view": "Product View", "view": "Product View",
+        "add_to_cart": "Add to Cart", "cart": "Add to Cart",
+        "purchase": "Purchase"
     }
-
-    # If already nice-cased values exist, keep them
-    nice = df["EventType"].astype(str)
-    # Prefer mapping; if not found, preserve original
-    df["EventType"] = raw.map(mapping).fillna(nice)
+    df["EventTypeMapped"] = df["EventType"].map(event_map)
+    
     return df
 
-def compute_funnel_counts(df_funnel: pd.DataFrame) -> pd.Series:
-    stages = ["Product View", "Add to Cart", "Purchase"]
-    counts = df_funnel["EventType"].value_counts().reindex(stages).fillna(0).astype(int)
-    return counts
-
-def build_conversion_table(counts: pd.Series) -> pd.DataFrame:
-    views = int(counts.get("Product View", 0))
-    carts = int(counts.get("Add to Cart", 0))
-    purchases = int(counts.get("Purchase", 0))
-
-    conv_view_to_cart = _safe_div(carts, views)
-    conv_cart_to_purchase = _safe_div(purchases, carts)
-    conv_view_to_purchase = _safe_div(purchases, views)
-
-    drop_view = 1 - conv_view_to_cart
-    drop_cart = 1 - conv_cart_to_purchase
-
-    table = pd.DataFrame({
-        "Stage": ["Product View", "Add to Cart", "Purchase"],
-        "Count": [views, carts, purchases],
-        "Conv. from Previous": [np.nan, conv_view_to_cart, conv_cart_to_purchase],
-        "Conv. from Initial": [1.0, conv_view_to_cart, conv_view_to_purchase],
-        "Drop-off from Previous": [np.nan, drop_view, drop_cart]
-    })
-    return table
-
-def segment_conversion(df_funnel: pd.DataFrame, segment_col: str) -> pd.DataFrame:
-    """Compute per-segment conversion metrics."""
-    stages = ["Product View", "Add to Cart", "Purchase"]
-    if segment_col not in df_funnel.columns:
-        return pd.DataFrame()
-
-    # Count events per segment+stage
-    grp = df_funnel.groupby([segment_col, "EventType"]).size().unstack("EventType").reindex(columns=stages, fill_value=0)
-    grp = grp.fillna(0).astype(int)
-    grp = grp.rename(columns={
-        "Product View": "Views",
-        "Add to Cart": "Carts",
-        "Purchase": "Purchases"
-    })
-
-    # Conversions
-    grp["View→Cart %"] = (grp["Carts"] / grp["Views"].replace(0, np.nan) * 100).fillna(0).round(2)
-    grp["Cart→Purchase %"] = (grp["Purchases"] / grp["Carts"].replace(0, np.nan) * 100).fillna(0).round(2)
-    grp["View→Purchase %"] = (grp["Purchases"] / grp["Views"].replace(0, np.nan) * 100).fillna(0).round(2)
-    grp = grp.reset_index().rename(columns={segment_col: "Segment"})
-    return grp
-
-def product_conversion(df_funnel: pd.DataFrame) -> pd.DataFrame:
-    """Per-Product conversions (requires ProductID)."""
-    if "ProductID" not in df_funnel.columns:
-        return pd.DataFrame()
-
-    stages = ["Product View", "Add to Cart", "Purchase"]
-    grp = df_funnel.groupby(["ProductID", "EventType"]).size().unstack("EventType").reindex(columns=stages, fill_value=0)
-    grp = grp.fillna(0).astype(int)
-    grp = grp.rename(columns={
-        "Product View": "Views",
-        "Add to Cart": "Carts",
-        "Purchase": "Purchases"
-    })
-    grp["View→Cart %"] = (grp["Carts"] / grp["Views"].replace(0, np.nan) * 100).fillna(0).round(2)
-    grp["Cart→Purchase %"] = (grp["Purchases"] / grp["Carts"].replace(0, np.nan) * 100).fillna(0).round(2)
-    grp["View→Purchase %"] = (grp["Purchases"] / grp["Views"].replace(0, np.nan) * 100).fillna(0).round(2)
-    grp = grp.reset_index()
-    return grp
-
 # ---------------------------#
-# Data Load + Prep
+# Main App Logic
 # ---------------------------#
-@st.cache_data
-def load_data(path: str = "ecommerce_clickstream_transactions.csv") -> pd.DataFrame:
-    df = pd.read_csv(path)
-    df = standardize_columns(df)
-    # Ensure essential columns exist
-    missing = [c for c in ESSENTIAL_COLS if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}. Found: {list(df.columns)}")
-    # Parse timestamp
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
-    df = df.dropna(subset=["Timestamp", "EventType"])
-    df = standardize_events(df)
-    # Keep only main funnel stages in the dataset for analysis tabs; Overview tab can still reflect this subset
-    main_funnel = ["Product View", "Add to Cart", "Purchase"]
-    df_funnel = df[df["EventType"].isin(main_funnel)].copy()
-    return df, df_funnel
 
+# --- Data Loading ---
 try:
-    df_raw, df_funnel_base = load_data()
+    df_raw = load_and_prep_data("ecommerce_clickstream_transactions.csv")
+    df_funnel_base = df_raw[df_raw["EventTypeMapped"].notna()].copy()
 except Exception as e:
-    st.error(f"❌ Failed to load data: {e}")
+    st.error(f"❌ **Error Loading Data:** {e}")
+    st.info("Please ensure 'ecommerce_clickstream_transactions.csv' is in the same folder as this script.")
     st.stop()
 
-# ---------------------------#
-# Sidebar Filters
-# ---------------------------#
-st.sidebar.title("🔎 Filters")
+# --- Sidebar Filters ---
+st.sidebar.header("Date Range Filter")
+min_date = df_funnel_base["Timestamp"].min().date()
+max_date = df_funnel_base["Timestamp"].max().date()
 
-# Date Range
-min_d = df_funnel_base["Timestamp"].min().date()
-max_d = df_funnel_base["Timestamp"].max().date()
-date_from, date_to = st.sidebar.date_input(
-    "Date range",
-    value=(min_d, max_d),
-    min_value=min_d, max_value=max_d
-) if min_d and max_d else (date.today(), date.today())
-
-mask_date = (df_funnel_base["Timestamp"].dt.date >= date_from) & (df_funnel_base["Timestamp"].dt.date <= date_to)
-df_funnel = df_funnel_base.loc[mask_date].copy()
-
-# Optional filters
-if "Device" in df_funnel.columns:
-    dev_sel = st.sidebar.multiselect("Device", sorted(df_funnel["Device"].dropna().unique().tolist()),
-                                     default=sorted(df_funnel["Device"].dropna().unique().tolist()))
-    if dev_sel:
-        df_funnel = df_funnel[df_funnel["Device"].isin(dev_sel)]
-
-if "Category" in df_funnel.columns:
-    cat_sel = st.sidebar.multiselect("Category", sorted(df_funnel["Category"].dropna().unique().tolist()))
-    if cat_sel:
-        df_funnel = df_funnel[df_funnel["Category"].isin(cat_sel)]
-
-if "ProductID" in df_funnel.columns:
-    # Provide a quick search (optional)
-    prod_search = st.sidebar.text_input("Search ProductID (contains)")
-    if prod_search:
-        df_funnel = df_funnel[df_funnel["ProductID"].astype(str).str.contains(prod_search, case=False, na=False)]
-
-st.sidebar.markdown("---")
-show_table_downloads = st.sidebar.checkbox("Enable downloads for summary tables", value=True)
-
-# ---------------------------#
-# Title + KPIs
-# ---------------------------#
-st.title("E-commerce Funnel Dashboard 🛍️")
-st.caption("Analyze user behavior across the funnel to find drop-off points and improve conversion rates.")
-
-funnel_counts = compute_funnel_counts(df_funnel)
-views = int(funnel_counts.get("Product View", 0))
-carts = int(funnel_counts.get("Add to Cart", 0))
-purchases = int(funnel_counts.get("Purchase", 0))
-
-conv_view_to_cart = _safe_div(carts, views)
-conv_cart_to_purchase = _safe_div(purchases, carts)
-conv_view_to_purchase = _safe_div(purchases, views)
-
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total Product Views", f"{views:,}")
-col2.metric("Added to Cart", f"{carts:,}", f"{(conv_view_to_cart*100):.1f}% from views" if views else "—")
-col3.metric("Purchases", f"{purchases:,}", f"{(conv_cart_to_purchase*100):.1f}% from carts" if carts else "—")
-col4.metric("Overall Conversion", f"{(conv_view_to_purchase*100):.1f}%" if views else "0.0%")
-
-# ---------------------------#
-# Tabs
-# ---------------------------#
-tab_overview, tab_funnel, tab_trends, tab_segments, tab_products, tab_diagnostics = st.tabs(
-    ["📊 Overview", "🔽 Funnel", "📈 Trends", "🧩 Segments", "🛒 Products", "🧪 Diagnostics"]
+start_date, end_date = st.sidebar.date_input(
+    "Select date range:",
+    (min_date, max_date),
+    min_value=min_date,
+    max_value=max_date
 )
 
-# ---------------------------#
-# Overview Tab
-# ---------------------------#
-with tab_overview:
-    left, right = st.columns((1, 1))
-    with left:
-        st.subheader("Event Distribution")
-        if len(df_funnel) > 0:
-            fig_pie = px.pie(
-                df_funnel,
-                names="EventType",
-                title="Share of Funnel Events",
-                hole=0.35
-            )
-            st.plotly_chart(fig_pie, use_container_width=True)
-        else:
-            st.info("No data for the selected filters.")
+# Apply date filter
+start_ts = pd.to_datetime(start_date)
+end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+df_funnel = df_funnel_base[(df_funnel_base['Timestamp'] >= start_ts) & (df_funnel_base['Timestamp'] < end_ts)]
 
-    with right:
-        st.subheader("Drop-off Insights")
-        drop1 = (1 - conv_view_to_cart) * 100 if views else 0
-        drop2 = (1 - conv_cart_to_purchase) * 100 if carts else 0
-        st.markdown(
-            f"""
-            - 🔻 **{drop1:.1f}%** dropped after viewing (did not add to cart)  
-            - 🔻 **{drop2:.1f}%** dropped after adding to cart (did not purchase)  
-            - ✅ **{(conv_view_to_purchase*100):.1f}%** overall conversion from view → purchase
-            """
-        )
 
-    st.subheader("Funnel Summary Table")
-    conv_table = build_conversion_table(funnel_counts)
-    st.dataframe(conv_table.style.format({
-        "Conv. from Previous": "{:.2%}",
-        "Conv. from Initial": "{:.2%}",
-        "Drop-off from Previous": "{:.2%}"
-    }), use_container_width=True)
+# --- Core Metrics Calculation (ACCURATE: Based on Unique Users) ---
+if not df_funnel.empty:
+    views_users = df_funnel[df_funnel['EventTypeMapped'] == 'Product View']['UserID'].nunique()
+    cart_users = df_funnel[df_funnel['EventTypeMapped'] == 'Add to Cart']['UserID'].nunique()
+    purchase_users = df_funnel[df_funnel['EventTypeMapped'] == 'Purchase']['UserID'].nunique()
+    
+    # Revenue Metrics
+    total_revenue = df_funnel[df_funnel['EventTypeMapped'] == 'Purchase']['Amount'].sum()
+    aov = total_revenue / purchase_users if purchase_users > 0 else 0
+    
+    # Conversion Rates
+    view_to_cart_rate = cart_users / views_users if views_users > 0 else 0
+    cart_to_purchase_rate = purchase_users / cart_users if cart_users > 0 else 0
+    overall_conversion_rate = purchase_users / views_users if views_users > 0 else 0
+else: # Handle empty dataframe after filtering
+    views_users, cart_users, purchase_users, total_revenue, aov = 0, 0, 0, 0, 0
+    view_to_cart_rate, cart_to_purchase_rate, overall_conversion_rate = 0, 0, 0
 
-    if show_table_downloads:
-        st.download_button("Download Funnel Summary CSV", conv_table.to_csv(index=False).encode("utf-8"),
-                           file_name="funnel_summary.csv", mime="text/csv")
+# --- Dashboard UI ---
+st.title("💰 Advanced E-commerce Dashboard")
+st.markdown("An accurate, user-centric analysis of your sales funnel and revenue.")
 
-# ---------------------------#
-# Funnel Tab
-# ---------------------------#
+# --- KPIs ---
+kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+kpi1.metric("Total Revenue", f"${total_revenue:,.2f}")
+kpi2.metric("Average Order Value (AOV)", f"${aov:,.2f}")
+kpi3.metric("Total Purchases", f"{purchase_users:,}")
+kpi4.metric("Overall Conversion Rate", f"{overall_conversion_rate:.2%}")
+
+st.markdown("---")
+
+
+# --- Tabs for Deeper Analysis ---
+tab_funnel, tab_revenue, tab_products = st.tabs(["🔽 Funnel Analysis", "📈 Revenue Trends", "🛒 Product Performance"])
+
 with tab_funnel:
-    st.subheader("Funnel Visualization")
-    stages = ["Product View", "Add to Cart", "Purchase"]
-    fig_funnel = go.Figure(go.Funnel(
-        y=stages,
-        x=[views, carts, purchases],
-        textposition="inside",
-        textinfo="value+percent previous+percent initial"
-    ))
-    st.plotly_chart(fig_funnel, use_container_width=True)
+    st.header("Sales Funnel Performance")
+    st.markdown("This funnel tracks the number of **unique users** who performed each action.")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Funnel Chart
+        fig = go.Figure(go.Funnel(
+            y=["Product Views", "Added to Cart", "Purchases"],
+            x=[views_users, cart_users, purchase_users],
+            textinfo="value + percent initial + percent previous",
+            marker={"color": ["#0099ff", "#ff9900", "#33cc33"]},
+        ))
+        fig.update_layout(title_text="User Conversion Funnel")
+        st.plotly_chart(fig, use_container_width=True)
 
-# ---------------------------#
-# Trends Tab
-# ---------------------------#
-with tab_trends:
-    st.subheader("Daily Trends by Event")
-    if len(df_funnel) > 0:
-        daily = df_funnel.groupby([pd.Grouper(key="Timestamp", freq="D"), "EventType"]).size().reset_index(name="Count")
-        fig_line = px.line(daily, x="Timestamp", y="Count", color="EventType", markers=True)
-        st.plotly_chart(fig_line, use_container_width=True)
+    with col2:
+        # Funnel Metrics Table
+        st.subheader("Funnel Breakdown")
+        funnel_data = {
+            "Stage": ["Product View", "Add to Cart", "Purchase"],
+            "Unique Users": [f"{views_users:,}", f"{cart_users:,}", f"{purchase_users:,}"],
+            "Conversion from Previous": ["-", f"{view_to_cart_rate:.2%}", f"{cart_to_purchase_rate:.2%}"],
+            "Overall Conversion": ["-", "-", f"{overall_conversion_rate:.2%}"]
+        }
+        st.table(pd.DataFrame(funnel_data))
+        st.markdown(f"""
+        **Key Insights:**
+        - **Drop-off (View → Cart):** `{1-view_to_cart_rate:.2%}` of users viewed products but didn't add to cart.
+        - **Drop-off (Cart → Purchase):** `{1-cart_to_purchase_rate:.2%}` of users added items to their cart but did not complete the purchase.
+        """)
+
+with tab_revenue:
+    st.header("Revenue & Purchase Trends")
+    
+    # Daily Revenue Chart
+    df_purchases = df_funnel[df_funnel['EventTypeMapped'] == 'Purchase'].copy()
+    if not df_purchases.empty:
+        daily_revenue = df_purchases.set_index('Timestamp').resample('D')['Amount'].sum().reset_index()
+        fig_rev = px.line(daily_revenue, x='Timestamp', y='Amount', title='Daily Revenue Over Time', markers=True,
+                          labels={'Timestamp': 'Date', 'Amount': 'Total Revenue ($)'})
+        fig_rev.update_layout(hovermode="x unified")
+        st.plotly_chart(fig_rev, use_container_width=True)
     else:
-        st.info("No data for the selected filters.")
+        st.info("No purchase data available for the selected date range to display revenue trends.")
 
-    st.subheader("Activity Heatmap (Day × Hour)")
-    if len(df_funnel) > 0:
-        tmp = df_funnel.copy()
-        tmp["Day"] = tmp["Timestamp"].dt.day_name()
-        tmp["Hour"] = tmp["Timestamp"].dt.hour
-        # Order days Mon..Sun
-        day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        tmp["Day"] = pd.Categorical(tmp["Day"], categories=day_order, ordered=True)
-        heat = tmp.groupby(["Day", "Hour"]).size().reset_index(name="Count")
-        fig_heat = px.density_heatmap(
-            heat, x="Hour", y="Day", z="Count",
-            nbinsx=24, histfunc="avg", title="Events by Day and Hour"
-        )
-        st.plotly_chart(fig_heat, use_container_width=True)
-    else:
-        st.info("No data for the selected filters.")
-
-# ---------------------------#
-# Segments Tab
-# ---------------------------#
-with tab_segments:
-    st.subheader("Conversion by Segment")
-
-    segment_opts = []
-    for c in ["Device", "Category"]:
-        if c in df_funnel.columns:
-            segment_opts.append(c)
-
-    if len(segment_opts) == 0:
-        st.info("No segment columns (Device/Category) found in the dataset.")
-    else:
-        seg_col = st.selectbox("Choose a segment column", segment_opts, index=0)
-        seg_df = segment_conversion(df_funnel, seg_col)
-        if seg_df.empty:
-            st.info("Not enough data to compute segment conversions.")
-        else:
-            st.dataframe(seg_df, use_container_width=True)
-            if show_table_downloads:
-                st.download_button(f"Download {seg_col} Conversion CSV", seg_df.to_csv(index=False).encode("utf-8"),
-                                   file_name=f"{seg_col.lower()}_conversion.csv", mime="text/csv")
-
-            # Visualize View→Purchase % by segment (top 15)
-            top = seg_df.sort_values("View→Purchase %", ascending=False).head(15)
-            fig_bar = px.bar(top, x="Segment", y="View→Purchase %", title=f"{seg_col}: View→Purchase Conversion (%)")
-            fig_bar.update_layout(xaxis_tickangle=-30)
-            st.plotly_chart(fig_bar, use_container_width=True)
-
-# ---------------------------#
-# Products Tab
-# ---------------------------#
 with tab_products:
-    if "ProductID" not in df_funnel.columns:
-        st.info("No ProductID column found for product-level insights.")
+    st.header("Product Performance Analysis")
+    st.markdown("Analyze which products convert best and generate the most revenue.")
+
+    if 'ProductID' not in df_funnel.columns:
+        st.warning("ProductID column not found. Cannot perform product analysis.")
     else:
-        st.subheader("Top Purchased Products")
-        top_purchases = (
-            df_funnel[df_funnel["EventType"] == "Purchase"]["ProductID"]
-            .value_counts().head(20)
+        # Product Performance Calculation
+        product_stats = df_funnel.groupby('ProductID').agg(
+            views=('EventTypeMapped', lambda x: (x == 'Product View').sum()),
+            carts=('EventTypeMapped', lambda x: (x == 'Add to Cart').sum()),
+            purchases=('EventTypeMapped', lambda x: (x == 'Purchase').sum()),
+            revenue=('Amount', lambda x: x[df_funnel.loc[x.index, 'EventTypeMapped'] == 'Purchase'].sum())
+        ).reset_index()
+
+        product_stats = product_stats[(product_stats['views'] > 0) | (product_stats['purchases'] > 0)]
+        product_stats['view_to_cart_rate'] = (product_stats['carts'] / product_stats['views']).fillna(0)
+        product_stats['cart_to_purchase_rate'] = (product_stats['purchases'] / product_stats['carts']).fillna(0)
+        product_stats['overall_conversion'] = (product_stats['purchases'] / product_stats['views']).fillna(0)
+        
+        st.subheader("Top Products by Revenue")
+        st.dataframe(
+            product_stats.sort_values('revenue', ascending=False).head(20).style.format({
+                'revenue': '${:,.2f}',
+                'view_to_cart_rate': '{:.2%}',
+                'cart_to_purchase_rate': '{:.2%}',
+                'overall_conversion': '{:.2%}'
+            }),
+            use_container_width=True
         )
-        if len(top_purchases) > 0:
-            fig_top = px.bar(
-                x=top_purchases.index.astype(str),
-                y=top_purchases.values,
-                labels={"x": "ProductID", "y": "Purchases"},
-                title="Top 20 Products by Purchases"
-            )
-            fig_top.update_layout(xaxis_tickangle=-30)
-            st.plotly_chart(fig_top, use_container_width=True)
 
-        st.subheader("Per-Product Conversion")
-        prod_conv = product_conversion(df_funnel)
-        if not prod_conv.empty:
-            # Optional filter to focus on products with enough traffic
-            min_views = st.slider("Minimum Views (to include in conversion table)", 0, int(prod_conv["Views"].max() or 0), 10)
-            prod_conv_filtered = prod_conv[prod_conv["Views"] >= min_views].copy()
-            st.dataframe(prod_conv_filtered.sort_values("View→Purchase %", ascending=False), use_container_width=True)
-
-            if show_table_downloads:
-                st.download_button("Download Per-Product Conversion CSV",
-                                   prod_conv_filtered.to_csv(index=False).encode("utf-8"),
-                                   file_name="product_conversion.csv", mime="text/csv")
-        else:
-            st.info("Not enough product-level data to compute conversions.")
-
-# ---------------------------#
-# Diagnostics Tab
-# ---------------------------#
-with tab_diagnostics:
-    st.subheader("Cleaned Funnel Data Sample")
-    st.dataframe(df_funnel.head(50), use_container_width=True)
-
-    st.subheader("Column Summary")
-    st.write(pd.DataFrame({
-        "Column": df_raw.columns,
-        "Non-Null Count": [df_raw[c].notna().sum() for c in df_raw.columns],
-        "Dtype": [df_raw[c].dtype for c in df_raw.columns]
-    }))
-
-    st.subheader("Raw Event Counts (All Events)")
-    st.write(df_raw["EventType"].value_counts())
-
-    st.caption("Diagnostics are for quick verification and debugging of the pipeline.")
+        st.subheader("Products with Highest Conversion Rate (View -> Purchase)")
+        st.dataframe(
+            product_stats[product_stats['views'] > 10].sort_values('overall_conversion', ascending=False).head(20).style.format({
+                'revenue': '${:,.2f}',
+                'view_to_cart_rate': '{:.2%}',
+                'cart_to_purchase_rate': '{:.2%}',
+                'overall_conversion': '{:.2%}'
+            }),
+            use_container_width=True
+        )
