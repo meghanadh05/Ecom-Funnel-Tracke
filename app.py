@@ -1,208 +1,235 @@
 # app.py
-# ADVANCED E-commerce Funnel & Revenue Dashboard
-# Provides accurate, user-centric conversion metrics and deep product/revenue insights.
+# PROFESSIONAL PORTFOLIO VERSION
+# E-commerce Analytics Dashboard with Funnel, Revenue & Cohort Analysis
 
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from datetime import date
+from typing import Dict, Tuple
 
 # ---------------------------#
-# Page Config
+# Page Configuration
 # ---------------------------#
 st.set_page_config(
-    page_title="Advanced E-commerce Dashboard",
-    page_icon="💰",
-    layout="wide"
+    page_title="Pro E-commerce Analytics Dashboard",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # ---------------------------#
-# Helper Functions & Data Loading
+# Main Dashboard Class
 # ---------------------------#
 
-@st.cache_data
-def load_and_prep_data(path: str) -> pd.DataFrame:
-    """Loads, standardizes, and prepares the data for analysis."""
-    df = pd.read_csv(path)
-    
-    # Standardize column names for robustness
-    rename_map = {c: c.strip().replace(" ", "") for c in df.columns}
-    df = df.rename(columns=rename_map)
+class EcomDashboard:
+    """
+    A class to encapsulate the logic and UI of the e-commerce dashboard.
+    This structure is scalable, maintainable, and reflects professional coding standards.
+    """
+    def __init__(self, data_path: str):
+        self.data_path = data_path
+        self.df = self.load_and_prepare_data()
 
-    # Ensure essential columns exist
-    for col in ["UserID", "Timestamp", "EventType"]:
-        if col not in df.columns:
-            raise ValueError(f"Missing required column: {col}")
-            
-    # Data cleaning and typing
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
-    df.dropna(subset=["Timestamp", "UserID", "EventType"], inplace=True)
-    df["EventType"] = df["EventType"].astype(str).str.strip().str.lower()
-    df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
+    @st.cache_data
+    def load_and_prepare_data(_self) -> pd.DataFrame:
+        """
+        Loads, cleans, and prepares the e-commerce dataset.
+        Using _self as the first arg is a convention for methods cached by Streamlit.
+        Returns:
+            pd.DataFrame: The prepared DataFrame ready for analysis.
+        """
+        df = pd.read_csv(_self.data_path)
+        
+        # Standardize column names
+        df.columns = [col.strip().replace(" ", "") for col in df.columns]
 
-    # Standardize main funnel events
-    event_map = {
-        "product_view": "Product View", "view": "Product View",
-        "add_to_cart": "Add to Cart", "cart": "Add to Cart",
-        "purchase": "Purchase"
-    }
-    df["EventTypeMapped"] = df["EventType"].map(event_map)
-    
-    return df
+        # Data Cleaning and Feature Engineering
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors='coerce')
+        df.dropna(subset=["Timestamp", "UserID", "EventType"], inplace=True)
+        df["Amount"] = pd.to_numeric(df["Amount"], errors='coerce').fillna(0)
+        df["EventType"] = df["EventType"].astype(str).str.strip().lower()
+        
+        # Create a 'Month' column for cohort analysis
+        df['OrderMonth'] = df['Timestamp'].dt.to_period('M')
 
-# ---------------------------#
-# Main App Logic
-# ---------------------------#
+        # Map key funnel events
+        event_map = {
+            "product_view": "Product View", "view": "Product View",
+            "add_to_cart": "Add to Cart", "cart": "Add to Cart",
+            "purchase": "Purchase"
+        }
+        df["FunnelEvent"] = df["EventType"].map(event_map)
+        
+        return df
 
-# --- Data Loading ---
-try:
-    df_raw = load_and_prep_data("ecommerce_clickstream_transactions.csv")
-    df_funnel_base = df_raw[df_raw["EventTypeMapped"].notna()].copy()
-except Exception as e:
-    st.error(f"❌ **Error Loading Data:** {e}")
-    st.info("Please ensure 'ecommerce_clickstream_transactions.csv' is in the same folder as this script.")
-    st.stop()
+    def get_filtered_data(self) -> pd.DataFrame:
+        """
+        Applies sidebar filters to the dataset.
+        Returns:
+            pd.DataFrame: The filtered DataFrame.
+        """
+        st.sidebar.header("Master Filters")
+        
+        min_date = self.df["Timestamp"].min().date()
+        max_date = self.df["Timestamp"].max().date()
 
-# --- Sidebar Filters ---
-st.sidebar.header("Date Range Filter")
-min_date = df_funnel_base["Timestamp"].min().date()
-max_date = df_funnel_base["Timestamp"].max().date()
+        start_date, end_date = st.sidebar.date_input(
+            "Select date range:", (min_date, max_date),
+            min_value=min_date, max_value=max_date,
+            help="Filter the data to a specific date range for analysis."
+        )
+        
+        start_ts = pd.to_datetime(start_date)
+        end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+        
+        return self.df[(self.df['Timestamp'] >= start_ts) & (self.df['Timestamp'] < end_ts)]
 
-start_date, end_date = st.sidebar.date_input(
-    "Select date range:",
-    (min_date, max_date),
-    min_value=min_date,
-    max_value=max_date
-)
+    def run(self):
+        """
+        Main method to run the Streamlit application.
+        """
+        st.title("🚀 Professional E-commerce Analytics Dashboard")
+        st.markdown("""
+        This dashboard provides a comprehensive analysis of e-commerce data, including a user-centric sales funnel, 
+        revenue trends, and a user retention cohort analysis.
+        """)
 
-# Apply date filter
-start_ts = pd.to_datetime(start_date)
-end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1)
-df_funnel = df_funnel_base[(df_funnel_base['Timestamp'] >= start_ts) & (df_funnel_base['Timestamp'] < end_ts)]
+        df_filtered = self.get_filtered_data()
 
+        if df_filtered.empty:
+            st.warning("No data available for the selected date range. Please select a different period.")
+            return
 
-# --- Core Metrics Calculation (ACCURATE: Based on Unique Users) ---
-if not df_funnel.empty:
-    views_users = df_funnel[df_funnel['EventTypeMapped'] == 'Product View']['UserID'].nunique()
-    cart_users = df_funnel[df_funnel['EventTypeMapped'] == 'Add to Cart']['UserID'].nunique()
-    purchase_users = df_funnel[df_funnel['EventTypeMapped'] == 'Purchase']['UserID'].nunique()
-    
-    # Revenue Metrics
-    total_revenue = df_funnel[df_funnel['EventTypeMapped'] == 'Purchase']['Amount'].sum()
-    aov = total_revenue / purchase_users if purchase_users > 0 else 0
-    
-    # Conversion Rates
-    view_to_cart_rate = cart_users / views_users if views_users > 0 else 0
-    cart_to_purchase_rate = purchase_users / cart_users if cart_users > 0 else 0
-    overall_conversion_rate = purchase_users / views_users if views_users > 0 else 0
-else: # Handle empty dataframe after filtering
-    views_users, cart_users, purchase_users, total_revenue, aov = 0, 0, 0, 0, 0
-    view_to_cart_rate, cart_to_purchase_rate, overall_conversion_rate = 0, 0, 0
+        self.render_kpis(df_filtered)
+        
+        self.render_tabs(df_filtered)
 
-# --- Dashboard UI ---
-st.title("💰 Advanced E-commerce Dashboard")
-st.markdown("An accurate, user-centric analysis of your sales funnel and revenue.")
+    def render_kpis(self, df: pd.DataFrame):
+        """Renders the Key Performance Indicators."""
+        
+        # --- Accurate User-Centric Calculations ---
+        views_users = df[df['FunnelEvent'] == 'Product View']['UserID'].nunique()
+        cart_users = df[df['FunnelEvent'] == 'Add to Cart']['UserID'].nunique()
+        purchase_users = df[df['FunnelEvent'] == 'Purchase']['UserID'].nunique()
+        total_revenue = df[df['FunnelEvent'] == 'Purchase']['Amount'].sum()
+        aov = total_revenue / purchase_users if purchase_users > 0 else 0
+        overall_conversion = purchase_users / views_users if views_users > 0 else 0
 
-# --- KPIs ---
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-kpi1.metric("Total Revenue", f"${total_revenue:,.2f}")
-kpi2.metric("Average Order Value (AOV)", f"${aov:,.2f}")
-kpi3.metric("Total Purchases", f"{purchase_users:,}")
-kpi4.metric("Overall Conversion Rate", f"{overall_conversion_rate:.2%}")
-
-st.markdown("---")
+        st.markdown("### 📊 Key Performance Indicators")
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        kpi1.metric("Total Revenue", f"${total_revenue:,.2f}", help="Total revenue from all purchases.")
+        kpi2.metric("Avg. Order Value", f"${aov:,.2f}", help="Average revenue per purchase transaction.")
+        kpi3.metric("Total Purchases", f"{purchase_users:,}", help="Total number of unique customers who made a purchase.")
+        kpi4.metric("Overall Conversion Rate", f"{overall_conversion:.2%}", help="Percentage of users who viewed a product and then made a purchase.")
+        st.markdown("---")
 
 
-# --- Tabs for Deeper Analysis ---
-tab_funnel, tab_revenue, tab_products = st.tabs(["🔽 Funnel Analysis", "📈 Revenue Trends", "🛒 Product Performance"])
+    def render_tabs(self, df: pd.DataFrame):
+        """Renders the main analysis tabs."""
+        tab_funnel, tab_cohort, tab_products = st.tabs([
+            "🔽 Funnel Analysis", 
+            "👥 Cohort Retention Analysis", 
+            "🛒 Product Insights"
+        ])
 
-with tab_funnel:
-    st.header("Sales Funnel Performance")
-    st.markdown("This funnel tracks the number of **unique users** who performed each action.")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        # Funnel Chart
+        with tab_funnel:
+            self.render_funnel_analysis(df)
+        with tab_cohort:
+            self.render_cohort_analysis(df)
+        with tab_products:
+            self.render_product_insights(df)
+
+    def render_funnel_analysis(self, df: pd.DataFrame):
+        st.header("Sales Funnel Performance")
+        st.markdown("Tracks the number of **unique users** moving through the purchase funnel.")
+        
+        views = df[df['FunnelEvent'] == 'Product View']['UserID'].nunique()
+        carts = df[df['FunnelEvent'] == 'Add to Cart']['UserID'].nunique()
+        purchases = df[df['FunnelEvent'] == 'Purchase']['UserID'].nunique()
+
         fig = go.Figure(go.Funnel(
             y=["Product Views", "Added to Cart", "Purchases"],
-            x=[views_users, cart_users, purchase_users],
-            textinfo="value + percent initial + percent previous",
-            marker={"color": ["#0099ff", "#ff9900", "#33cc33"]},
+            x=[views, carts, purchases],
+            textinfo="value + percent initial",
+            marker={"color": ["#1f77b4", "#ff7f0e", "#2ca02c"]},
         ))
         fig.update_layout(title_text="User Conversion Funnel")
         st.plotly_chart(fig, use_container_width=True)
 
-    with col2:
-        # Funnel Metrics Table
-        st.subheader("Funnel Breakdown")
-        funnel_data = {
-            "Stage": ["Product View", "Add to Cart", "Purchase"],
-            "Unique Users": [f"{views_users:,}", f"{cart_users:,}", f"{purchase_users:,}"],
-            "Conversion from Previous": ["-", f"{view_to_cart_rate:.2%}", f"{cart_to_purchase_rate:.2%}"],
-            "Overall Conversion": ["-", "-", f"{overall_conversion_rate:.2%}"]
-        }
-        st.table(pd.DataFrame(funnel_data))
-        st.markdown(f"""
-        **Key Insights:**
-        - **Drop-off (View → Cart):** `{1-view_to_cart_rate:.2%}` of users viewed products but didn't add to cart.
-        - **Drop-off (Cart → Purchase):** `{1-cart_to_purchase_rate:.2%}` of users added items to their cart but did not complete the purchase.
+    def render_cohort_analysis(self, df: pd.DataFrame):
+        st.header("User Retention Cohort Analysis")
+        st.markdown("""
+        This analysis tracks cohorts of users based on their first purchase month and shows what percentage
+        of them return to make another purchase in the following months. It's a key indicator of customer loyalty and product-market fit.
         """)
+        
+        df_purchases = df[df['FunnelEvent'] == 'Purchase'].copy()
+        if df_purchases.empty:
+            st.info("No purchase data available to generate cohort analysis.")
+            return
 
-with tab_revenue:
-    st.header("Revenue & Purchase Trends")
-    
-    # Daily Revenue Chart
-    df_purchases = df_funnel[df_funnel['EventTypeMapped'] == 'Purchase'].copy()
-    if not df_purchases.empty:
-        daily_revenue = df_purchases.set_index('Timestamp').resample('D')['Amount'].sum().reset_index()
-        fig_rev = px.line(daily_revenue, x='Timestamp', y='Amount', title='Daily Revenue Over Time', markers=True,
-                          labels={'Timestamp': 'Date', 'Amount': 'Total Revenue ($)'})
-        fig_rev.update_layout(hovermode="x unified")
-        st.plotly_chart(fig_rev, use_container_width=True)
-    else:
-        st.info("No purchase data available for the selected date range to display revenue trends.")
+        df_purchases['CohortMonth'] = df_purchases.groupby('UserID')['OrderMonth'].transform('min')
+        
+        def get_month_diff(df, event_month_col, cohort_month_col):
+            return (df[event_month_col].dt.year - df[cohort_month_col].dt.year) * 12 + \
+                   (df[event_month_col].dt.month - df[cohort_month_col].dt.month)
 
-with tab_products:
-    st.header("Product Performance Analysis")
-    st.markdown("Analyze which products convert best and generate the most revenue.")
+        df_purchases['CohortIndex'] = get_month_diff(df_purchases, df_purchases['OrderMonth'], df_purchases['CohortMonth'])
 
-    if 'ProductID' not in df_funnel.columns:
-        st.warning("ProductID column not found. Cannot perform product analysis.")
-    else:
-        # Product Performance Calculation
-        product_stats = df_funnel.groupby('ProductID').agg(
-            views=('EventTypeMapped', lambda x: (x == 'Product View').sum()),
-            carts=('EventTypeMapped', lambda x: (x == 'Add to Cart').sum()),
-            purchases=('EventTypeMapped', lambda x: (x == 'Purchase').sum()),
-            revenue=('Amount', lambda x: x[df_funnel.loc[x.index, 'EventTypeMapped'] == 'Purchase'].sum())
+        cohort_data = df_purchases.groupby(['CohortMonth', 'CohortIndex'])['UserID'].nunique().reset_index()
+        cohort_counts = cohort_data.pivot_table(index='CohortMonth', columns='CohortIndex', values='UserID')
+        
+        cohort_sizes = cohort_counts.iloc[:, 0]
+        cohort_retention = cohort_counts.divide(cohort_sizes, axis=0)
+        cohort_retention.index = cohort_retention.index.strftime('%Y-%m')
+
+        fig = px.imshow(
+            cohort_retention, 
+            labels=dict(x="Months Since First Purchase", y="First Purchase Month", color="Retention Rate"),
+            title="Monthly Customer Retention Rate (%)",
+            color_continuous_scale=px.colors.sequential.BuGn
+        )
+        fig.update_layout(
+            xaxis_title="Months Since First Purchase",
+            yaxis_title="First Purchase Cohort"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    def render_product_insights(self, df: pd.DataFrame):
+        st.header("Product Performance")
+        
+        if 'ProductID' not in df.columns:
+            st.warning("ProductID column not found. Cannot generate product insights.")
+            return
+
+        product_stats = df.groupby('ProductID').agg(
+            views=('FunnelEvent', lambda x: (x == 'Product View').sum()),
+            purchases=('FunnelEvent', lambda x: (x == 'Purchase').sum()),
+            revenue=('Amount', lambda x: x[df.loc[x.index, 'FunnelEvent'] == 'Purchase'].sum())
         ).reset_index()
 
-        product_stats = product_stats[(product_stats['views'] > 0) | (product_stats['purchases'] > 0)]
-        product_stats['view_to_cart_rate'] = (product_stats['carts'] / product_stats['views']).fillna(0)
-        product_stats['cart_to_purchase_rate'] = (product_stats['purchases'] / product_stats['carts']).fillna(0)
-        product_stats['overall_conversion'] = (product_stats['purchases'] / product_stats['views']).fillna(0)
+        product_stats = product_stats[product_stats['views'] > 0]
+        product_stats['conversion_rate'] = (product_stats['purchases'] / product_stats['views'])
         
         st.subheader("Top Products by Revenue")
         st.dataframe(
-            product_stats.sort_values('revenue', ascending=False).head(20).style.format({
-                'revenue': '${:,.2f}',
-                'view_to_cart_rate': '{:.2%}',
-                'cart_to_purchase_rate': '{:.2%}',
-                'overall_conversion': '{:.2%}'
+            product_stats.sort_values('revenue', ascending=False).head(15).style.format({
+                'revenue': '${:,.2f}', 'conversion_rate': '{:.2%}'
             }),
             use_container_width=True
         )
 
-        st.subheader("Products with Highest Conversion Rate (View -> Purchase)")
-        st.dataframe(
-            product_stats[product_stats['views'] > 10].sort_values('overall_conversion', ascending=False).head(20).style.format({
-                'revenue': '${:,.2f}',
-                'view_to_cart_rate': '{:.2%}',
-                'cart_to_purchase_rate': '{:.2%}',
-                'overall_conversion': '{:.2%}'
-            }),
-            use_container_width=True
-        )
+# ---------------------------#
+# App Execution
+# ---------------------------#
+
+if __name__ == "__main__":
+    try:
+        dashboard = EcomDashboard(data_path="ecommerce_clickstream_transactions.csv")
+        dashboard.run()
+    except FileNotFoundError:
+        st.error("The data file ('ecommerce_clickstream_transactions.csv') was not found. Please make sure it's in the same directory as the app.py script.")
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
