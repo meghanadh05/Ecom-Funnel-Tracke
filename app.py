@@ -1,5 +1,5 @@
 # app.py
-# PROFESSIONAL PORTFOLIO VERSION
+# PROFESSIONAL PORTFOLIO VERSION (Corrected)
 # E-commerce Analytics Dashboard with Funnel, Revenue & Cohort Analysis
 
 import pandas as pd
@@ -49,7 +49,9 @@ class EcomDashboard:
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors='coerce')
         df.dropna(subset=["Timestamp", "UserID", "EventType"], inplace=True)
         df["Amount"] = pd.to_numeric(df["Amount"], errors='coerce').fillna(0)
-        df["EventType"] = df["EventType"].astype(str).str.strip().lower()
+        
+        # CORRECTED LINE: Use the .str accessor for string operations on the Series
+        df["EventType"] = df["EventType"].astype(str).str.strip().str.lower()
         
         # Create a 'Month' column for cohort analysis
         df['OrderMonth'] = df['Timestamp'].dt.to_period('M')
@@ -173,10 +175,12 @@ class EcomDashboard:
         df_purchases['CohortMonth'] = df_purchases.groupby('UserID')['OrderMonth'].transform('min')
         
         def get_month_diff(df, event_month_col, cohort_month_col):
+            # This calculation now works correctly with Period objects
             return (df[event_month_col].dt.year - df[cohort_month_col].dt.year) * 12 + \
                    (df[event_month_col].dt.month - df[cohort_month_col].dt.month)
 
-        df_purchases['CohortIndex'] = get_month_diff(df_purchases, df_purchases['OrderMonth'], df_purchases['CohortMonth'])
+        # Convert Period to Timestamp for calculation
+        df_purchases['CohortIndex'] = get_month_diff(df_purchases, df_purchases['OrderMonth'].dt.to_timestamp(), df_purchases['CohortMonth'].dt.to_timestamp())
 
         cohort_data = df_purchases.groupby(['CohortMonth', 'CohortIndex'])['UserID'].nunique().reset_index()
         cohort_counts = cohort_data.pivot_table(index='CohortMonth', columns='CohortIndex', values='UserID')
@@ -189,7 +193,8 @@ class EcomDashboard:
             cohort_retention, 
             labels=dict(x="Months Since First Purchase", y="First Purchase Month", color="Retention Rate"),
             title="Monthly Customer Retention Rate (%)",
-            color_continuous_scale=px.colors.sequential.BuGn
+            color_continuous_scale=px.colors.sequential.BuGn,
+            text_auto=".0%"
         )
         fig.update_layout(
             xaxis_title="Months Since First Purchase",
